@@ -7,7 +7,11 @@ url = st.secrets["SUPABASE_URL"]
 key = st.secrets["SUPABASE_ANON_KEY"]
 supabase: Client = create_client(url, key)
 
-st.subheader("⏰ Schedule Medicine")
+st.title("💊 Smart Pill Dispenser Scheduler")
+
+# --- Initialize session state ---
+if "medicine_input" not in st.session_state:
+    st.session_state["medicine_input"] = ""
 
 # --- DATE INPUT ---
 dispense_date = st.date_input("Dispense Date", value=date.today())
@@ -19,18 +23,17 @@ selected_time = st.selectbox(
     time_options,
     index=time_options.index("08:00") if "08:00" in time_options else 0
 )
-
 hour, minute = map(int, selected_time.split(":"))
 dispense_time = time(hour, minute)
-
 st.caption("✔ Time selectable in 5-minute intervals (5, 10, 15, 30)")
 
-# --- ADD NEW SCHEDULE SIDE BY SIDE ---
-slot_number = st.number_input("Slot Number (1-16)", min_value=1, max_value=16, value=1)
-col1, col2 = st.columns([3, 1])
+# --- ADD NEW SCHEDULE IN ONE ROW ---
+col1, col2, col3 = st.columns([1, 3, 1])
 with col1:
-    medicine_name = st.text_input("Medicine Name", key="medicine_input")
+    slot_number = st.number_input("Slot Number", min_value=1, max_value=16, value=1, key="slot_input")
 with col2:
+    medicine_name = st.text_input("Medicine Name", value=st.session_state["medicine_input"], key="medicine_input")
+with col3:
     add_clicked = st.button("Add Schedule", key="add_button")
 
 # --- SAVE LOGIC ---
@@ -38,7 +41,6 @@ if add_clicked:
     if not medicine_name.strip():
         st.error("Please enter a medicine name.")
     else:
-        # Insert into Supabase
         supabase.table("medicines").insert({
             "slot_number": slot_number,
             "medicine_name": medicine_name,
@@ -46,7 +48,7 @@ if add_clicked:
             "dispense_time": dispense_time.strftime("%H:%M")
         }).execute()
         st.success(f"Medicine scheduled for {selected_time} on {dispense_date}")
-        # Clear the input for next entry
+        # Reset input
         st.session_state["medicine_input"] = ""
 
 # --- DISPLAY EXISTING SCHEDULES BELOW ---
