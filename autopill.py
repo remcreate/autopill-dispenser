@@ -33,15 +33,12 @@ with col1:
 with col2:
     add_clicked = st.button("Add Schedule", key="add_button")
 
-# --- Initialize session state for refresh ---
-if "refresh" not in st.session_state:
-    st.session_state.refresh = False
-
 # --- SAVE LOGIC ---
 if add_clicked:
     if not medicine_name.strip():
         st.error("Please enter a medicine name.")
     else:
+        # Insert into Supabase
         supabase.table("medicines").insert({
             "slot_number": slot_number,
             "medicine_name": medicine_name,
@@ -49,13 +46,8 @@ if add_clicked:
             "dispense_time": dispense_time.strftime("%H:%M")
         }).execute()
         st.success(f"Medicine scheduled for {selected_time} on {dispense_date}")
-        # Trigger refresh by setting session state flag
-        st.session_state.refresh = True
-
-# --- REFRESH EXISTING SCHEDULES LIST ---
-if st.session_state.refresh:
-    st.session_state.refresh = False
-    st.experimental_rerun()
+        # Clear the input for next entry
+        st.session_state["medicine_input"] = ""
 
 # --- DISPLAY EXISTING SCHEDULES BELOW ---
 st.subheader("📝 Existing Dispense Times")
