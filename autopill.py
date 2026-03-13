@@ -9,10 +9,6 @@ supabase: Client = create_client(url, key)
 
 st.title("💊 Smart Pill Dispenser Scheduler")
 
-# --- Initialize session state ---
-if "medicine_input" not in st.session_state:
-    st.session_state["medicine_input"] = ""
-
 # --- DATE INPUT ---
 dispense_date = st.date_input("Dispense Date", value=date.today())
 
@@ -32,24 +28,24 @@ col1, col2, col3 = st.columns([1, 3, 1])
 with col1:
     slot_number = st.number_input("Slot Number", min_value=1, max_value=16, value=1, key="slot_input")
 with col2:
-    medicine_name = st.text_input("Medicine Name", value=st.session_state["medicine_input"], key="medicine_input")
+    # Use a temporary variable instead of binding to session_state
+    medicine_name_temp = st.text_input("Medicine Name", "")
 with col3:
     add_clicked = st.button("Add Schedule", key="add_button")
 
 # --- SAVE LOGIC ---
 if add_clicked:
-    if not medicine_name.strip():
+    if not medicine_name_temp.strip():
         st.error("Please enter a medicine name.")
     else:
         supabase.table("medicines").insert({
             "slot_number": slot_number,
-            "medicine_name": medicine_name,
+            "medicine_name": medicine_name_temp,
             "dispense_date": str(dispense_date),
             "dispense_time": dispense_time.strftime("%H:%M")
         }).execute()
         st.success(f"Medicine scheduled for {selected_time} on {dispense_date}")
-        # Reset input
-        st.session_state["medicine_input"] = ""
+        # No need to reset session_state key — using a temp variable avoids the error
 
 # --- DISPLAY EXISTING SCHEDULES BELOW ---
 st.subheader("📝 Existing Dispense Times")
