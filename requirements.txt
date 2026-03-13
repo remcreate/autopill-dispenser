@@ -1,4 +1,6 @@
-streamlit
 pyrebase4==4.7.1
 pandas
 firebase-admin
+streamlit>=1.30
+supabase>=2.0
+
