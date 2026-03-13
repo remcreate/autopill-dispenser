@@ -2,7 +2,7 @@ import streamlit as st
 from datetime import time, date
 from supabase import create_client, Client
 
-# --- Supabase client (example) ---
+# --- Supabase client ---
 url = st.secrets["SUPABASE_URL"]
 key = st.secrets["SUPABASE_ANON_KEY"]
 supabase: Client = create_client(url, key)
@@ -45,11 +45,17 @@ if times_list:
 else:
     st.write("No medicines scheduled yet.")
 
-# --- ADD NEW SCHEDULE ---
+# --- ADD NEW SCHEDULE SIDE BY SIDE ---
 slot_number = st.number_input("Slot Number (1-16)", min_value=1, max_value=16, value=1)
-medicine_name = st.text_input("Medicine Name", "")
 
-if st.button("Add Schedule"):
+col1, col2 = st.columns([3, 1])  # 3:1 width ratio
+with col1:
+    medicine_name = st.text_input("Medicine Name", "")
+with col2:
+    add_clicked = st.button("Add Schedule")
+
+# --- SAVE LOGIC ---
+if add_clicked:
     if not medicine_name.strip():
         st.error("Please enter a medicine name.")
     else:
