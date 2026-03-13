@@ -34,17 +34,6 @@ dispense_time = time(hour, minute)
 
 st.caption("✔ Time selectable in 5-minute intervals (5, 10, 15, 30)")
 
-# --- DISPLAY EXISTING SCHEDULES ---
-st.subheader("📝 Existing Dispense Times")
-existing_times = supabase.table("medicines").select("*").order("dispense_time").execute()
-times_list = existing_times.data
-
-if times_list:
-    for t in times_list:
-        st.write(f"Slot {t['slot_number']} | {t['medicine_name']} | {t['dispense_date']} | {t['dispense_time']}")
-else:
-    st.write("No medicines scheduled yet.")
-
 # --- ADD NEW SCHEDULE SIDE BY SIDE ---
 slot_number = st.number_input("Slot Number (1-16)", min_value=1, max_value=16, value=1)
 
@@ -67,3 +56,14 @@ if add_clicked:
         }).execute()
         st.success(f"Medicine scheduled for {selected_time} on {dispense_date}")
         st.experimental_rerun()  # Refresh the list
+
+# --- DISPLAY EXISTING SCHEDULES BELOW ---
+st.subheader("📝 Existing Dispense Times")
+existing_times = supabase.table("medicines").select("*").order("dispense_time").execute()
+times_list = existing_times.data
+
+if times_list:
+    for t in times_list:
+        st.write(f"Slot {t['slot_number']} | {t['medicine_name']} | {t['dispense_date']} | {t['dispense_time']}")
+else:
+    st.write("No medicines scheduled yet.")
