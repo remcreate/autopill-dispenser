@@ -3,6 +3,7 @@ from datetime import datetime, date, timedelta
 from pathlib import Path
 from html import escape
 from supabase import create_client, Client
+import math
 
 # --------------------------------------------------
 # PAGE CONFIGURATION
@@ -339,6 +340,260 @@ def delete_schedule(schedule_id):
             "Check the DELETE policy."
         )
 
+def get_slot_medicines(schedules):
+    """
+    Organize current and future medicines according to slot.
+
+    Repeated schedules for the same medicine are shown only once.
+    """
+    slot_medicines = {
+        slot_number: set()
+        for slot_number in range(1, 16)
+    }
+
+    today_string = str(date.today())
+
+    for schedule in schedules:
+        dispense_date = str(
+            schedule.get("dispense_date", "")
+        )
+
+        # Do not include expired schedules in the loading guide.
+        if dispense_date and dispense_date < today_string:
+            continue
+
+        try:
+            slot_number = int(
+                schedule.get("slot_number", 0)
+            )
+        except (TypeError, ValueError):
+            continue
+
+        medicine_name = str(
+            schedule.get("medicine_name", "")
+        ).strip()
+
+        if (
+            1 <= slot_number <= 15
+            and medicine_name
+        ):
+            slot_medicines[slot_number].add(
+                medicine_name
+            )
+
+    return slot_medicines
+
+
+def shorten_medicine_name(medicine_names):
+    """Create a short label that fits inside a slot."""
+    if not medicine_names:
+        return "EMPTY"
+
+    if len(medicine_names) > 1:
+        return "MULTIPLE"
+
+    medicine_name = next(iter(medicine_names))
+
+    if len(medicine_name) > 13:
+        return medicine_name[:11] + "…"
+
+    return medicine_name
+
+
+def create_dispenser_svg(slot_medicines):
+    """
+    Create a circular 15-slot dispenser diagram.
+
+    Slot 1 is placed at the dispensing opening at the bottom.
+    Slot numbers increase clockwise because the motor turns
+    counterclockwise.
+    """
+    width = 700
+    height = 720
+    center_x = 350
+    center_y = 330
+    radius = 265
+    label_radius = 185
+    slot_angle = 360 / 15
+
+    occupied_colors = [
+        "#B8E8E0",
+        "#A8DADC",
+        "#BDE0FE",
+        "#CDE7FF",
+        "#D7E3FC"
+    ]
+
+    empty_color = "#EEF3F6"
+
+    svg_parts = [
+        (
+            f'<svg viewBox="0 0 {width} {height}" '
+            'xmlns="http://www.w3.org/2000/svg" '
+            'style="width:100%; max-width:700px; height:auto;">'
+        ),
+        (
+            '<rect width="100%" height="100%" '
+            'fill="transparent"/>'
+        )
+    ]
+
+    for slot_number in range(1, 16):
+        # Slot 1 is centered at 90 degrees, or the bottom.
+        # Increasing SVG angles move clockwise.
+        center_angle = 90 + (
+            (slot_number - 1) * slot_angle
+        )
+
+        start_angle = center_angle - slot_angle / 2
+        end_angle = center_angle + slot_angle / 2
+
+        start_radians = math.radians(start_angle)
+        end_radians = math.radians(end_angle)
+        center_radians = math.radians(center_angle)
+
+        start_x = (
+            center_x
+            + radius * math.cos(start_radians)
+        )
+        start_y = (
+            center_y
+            + radius * math.sin(start_radians)
+        )
+
+        end_x = (
+            center_x
+            + radius * math.cos(end_radians)
+        )
+        end_y = (
+            center_y
+            + radius * math.sin(end_radians)
+        )
+
+        label_x = (
+            center_x
+            + label_radius * math.cos(center_radians)
+        )
+        label_y = (
+            center_y
+            + label_radius * math.sin(center_radians)
+        )
+
+        medicine_names = slot_medicines.get(
+            slot_number,
+            set()
+        )
+
+        if medicine_names:
+            fill_color = occupied_colors[
+                (slot_number - 1) % len(occupied_colors)
+            ]
+        else:
+            fill_color = empty_color
+
+        short_name = escape(
+            shorten_medicine_name(medicine_names)
+        )
+
+        path = (
+            f"M {center_x} {center_y} "
+            f"L {start_x:.2f} {start_y:.2f} "
+            f"A {radius} {radius} 0 0 1 "
+            f"{end_x:.2f} {end_y:.2f} Z"
+        )
+
+        svg_parts.append(
+            f'<path d="{path}" '
+            f'fill="{fill_color}" '
+            'stroke="#FFFFFF" '
+            'stroke-width="4"/>'
+        )
+
+        svg_parts.append(
+            f'<text x="{label_x:.2f}" '
+            f'y="{label_y - 7:.2f}" '
+            'text-anchor="middle" '
+            'font-family="Arial, sans-serif" '
+            'font-size="18" '
+            'font-weight="800" '
+            'fill="#12304A">'
+            f'{slot_number}'
+            '</text>'
+        )
+
+        svg_parts.append(
+            f'<text x="{label_x:.2f}" '
+            f'y="{label_y + 13:.2f}" '
+            'text-anchor="middle" '
+            'font-family="Arial, sans-serif" '
+            'font-size="10" '
+            'font-weight="700" '
+            'fill="#36566E">'
+            f'{short_name}'
+            '</text>'
+        )
+
+    # Center circle and motor direction
+    svg_parts.extend(
+        [
+            (
+                f'<circle cx="{center_x}" '
+                f'cy="{center_y}" r="82" '
+                'fill="#12304A" '
+                'stroke="#FFFFFF" '
+                'stroke-width="5"/>'
+            ),
+            (
+                f'<text x="{center_x}" '
+                f'y="{center_y - 7}" '
+                'text-anchor="middle" '
+                'font-family="Arial, sans-serif" '
+                'font-size="45" '
+                'font-weight="800" '
+                'fill="#FFFFFF">↺</text>'
+            ),
+            (
+                f'<text x="{center_x}" '
+                f'y="{center_y + 24}" '
+                'text-anchor="middle" '
+                'font-family="Arial, sans-serif" '
+                'font-size="12" '
+                'font-weight="700" '
+                'fill="#FFFFFF">'
+                'COUNTERCLOCKWISE'
+                '</text>'
+            ),
+            # Dispensing opening marker
+            (
+                f'<path d="M {center_x - 24} 610 '
+                f'L {center_x} 635 '
+                f'L {center_x + 24} 610 Z" '
+                'fill="#FF6B5F"/>'
+            ),
+            (
+                f'<text x="{center_x}" y="670" '
+                'text-anchor="middle" '
+                'font-family="Arial, sans-serif" '
+                'font-size="16" '
+                'font-weight="800" '
+                'fill="#12304A">'
+                'DISPENSING OPENING / HOME POSITION'
+                '</text>'
+            ),
+            (
+                f'<text x="{center_x}" y="695" '
+                'text-anchor="middle" '
+                'font-family="Arial, sans-serif" '
+                'font-size="14" '
+                'fill="#536B7C">'
+                'Align Slot 1 with this opening before loading'
+                '</text>'
+            ),
+            '</svg>'
+        ]
+    )
+
+    return "".join(svg_parts)
 
 # --------------------------------------------------
 # SESSION STATE
@@ -697,6 +952,75 @@ except Exception as error:
     schedules = []
     st.error("The schedules could not be loaded.")
     st.exception(error)
+# --------------------------------------------------
+# MEDICINE LOADING GUIDE
+# --------------------------------------------------
+if schedules:
+    st.markdown(
+        '<div class="section-heading">'
+        '🍕 Medicine Loading Guide'
+        '</div>',
+        unsafe_allow_html=True
+    )
+
+    st.info(
+        "View the dispenser from above. Align Slot 1 with the "
+        "dispensing opening. Because the motor rotates "
+        "counterclockwise, the slot numbers increase clockwise."
+    )
+
+    slot_medicines = get_slot_medicines(schedules)
+
+    dispenser_svg = create_dispenser_svg(
+        slot_medicines
+    )
+
+    st.markdown(
+        dispenser_svg,
+        unsafe_allow_html=True
+    )
+
+    # Check for multiple medicines assigned to one slot.
+    conflicting_slots = {
+        slot: medicines
+        for slot, medicines in slot_medicines.items()
+        if len(medicines) > 1
+    }
+
+    if conflicting_slots:
+        st.error(
+            "Some slots have more than one medicine assigned. "
+            "Place only one medicine type in each slot."
+        )
+
+        for slot, medicines in conflicting_slots.items():
+            st.write(
+                f"**Slot {slot}:** "
+                + ", ".join(sorted(medicines))
+            )
+
+    # Exact loading list
+    st.markdown("#### Exact Slot Arrangement")
+
+    loading_list_found = False
+
+    for slot_number in range(1, 16):
+        medicine_names = slot_medicines[
+            slot_number
+        ]
+
+        if medicine_names:
+            loading_list_found = True
+
+            st.write(
+                f"**Slot {slot_number}:** "
+                + ", ".join(sorted(medicine_names))
+            )
+
+    if not loading_list_found:
+        st.warning(
+            "There are no current or future medicines to load."
+        )
 
 if not schedules:
     st.markdown(
