@@ -201,7 +201,15 @@ def add_schedule(slot, medicine, selected_date, selected_time):
 
 
 def delete_schedule(schedule_id):
-    """Delete one schedule using its unique database ID."""
+    """Delete a schedule and confirm that Supabase removed it."""
+
+    if schedule_id is None:
+        raise ValueError(
+            "This medicine record has no ID. "
+            "Check the medicines table in Supabase."
+        )
+
+    # Attempt deletion
     (
         supabase
         .table("medicines")
@@ -209,6 +217,21 @@ def delete_schedule(schedule_id):
         .eq("id", schedule_id)
         .execute()
     )
+
+    # Check whether the record still exists
+    verification = (
+        supabase
+        .table("medicines")
+        .select("id")
+        .eq("id", schedule_id)
+        .execute()
+    )
+
+    if verification.data:
+        raise PermissionError(
+            "Supabase blocked the deletion. "
+            "A DELETE policy is probably missing."
+        )
 
 
 # --------------------------------------------------
@@ -443,18 +466,39 @@ else:
             )
 
         with delete_column:
+            confirm_delete = st.checkbox(
+                "Confirm",
+                key=f"confirm_{schedule_id}",
+                help="Check this box before deleting."
+            )
+
             if st.button(
                 "🗑️ Delete",
                 key=f"delete_{schedule_id}",
+                disabled=not confirm_delete,
                 use_container_width=True
             ):
-                st.session_state["pending_delete"] = {
-                    "id": schedule_id,
-                    "medicine_name": medicine,
-                    "dispense_time": scheduled_time
-                }
+                try:
+                    delete_schedule(schedule_id)
 
-                st.rerun()
+                    st.toast(
+                        f"{medicine} was deleted.",
+                        icon="✅"
+                    )
+
+                    st.rerun()
+
+                except PermissionError as error:
+                    st.error(str(error))
+
+                except ValueError as error:
+                    st.error(str(error))
+
+                except Exception as error:
+                    st.error(
+                        "Deletion failed because of a database error."
+                    )
+                    st.exception(error)
 
 # --------------------------------------------------
 # DELETE CONFIRMATION
