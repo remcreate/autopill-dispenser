@@ -416,11 +416,101 @@ Complete the form above to add a schedule.
     )
 
 else:
-    st.caption(
-        f"{len(schedules)} medicine "
-        f"{'schedule' if len(schedules) == 1 else 'schedules'}"
-    )
+    # Determine which schedules are currently checked.
+    selected_schedules = [
+        schedule
+        for schedule in schedules
+        if st.session_state.get(
+            f"select_schedule_{schedule.get('id')}",
+            False
+        )
+    ]
 
+    selected_ids = [
+        schedule["id"]
+        for schedule in selected_schedules
+        if schedule.get("id") is not None
+    ]
+
+    selected_count = len(selected_ids)
+
+    # ----------------------------------------------
+    # ACTION BAR ABOVE THE LIST
+    # ----------------------------------------------
+    count_column, delete_column = st.columns([3, 1.4])
+
+    with count_column:
+        if selected_count:
+            st.info(
+                f"✓ {selected_count} "
+                f"{'schedule' if selected_count == 1 else 'schedules'} "
+                "selected"
+            )
+        else:
+            st.caption(
+                f"{len(schedules)} medicine "
+                f"{'schedule' if len(schedules) == 1 else 'schedules'}"
+            )
+
+    with delete_column:
+        delete_selected = st.button(
+            "🗑️ Delete Checked",
+            key="delete_checked_schedules",
+            disabled=selected_count == 0,
+            use_container_width=True
+        )
+
+    # ----------------------------------------------
+    # DELETE ALL CHECKED SCHEDULES
+    # ----------------------------------------------
+    if delete_selected:
+        successfully_deleted = 0
+        deletion_errors = []
+
+        for schedule in selected_schedules:
+            schedule_id = schedule.get("id")
+            medicine = schedule.get(
+                "medicine_name",
+                "Unnamed medicine"
+            )
+
+            try:
+                delete_schedule(schedule_id)
+                successfully_deleted += 1
+
+            except Exception as error:
+                deletion_errors.append(
+                    f"{medicine}: {str(error)}"
+                )
+
+        # Clear the checkbox states after deletion.
+        for schedule_id in selected_ids:
+            checkbox_key = f"select_schedule_{schedule_id}"
+
+            if checkbox_key in st.session_state:
+                del st.session_state[checkbox_key]
+
+        if deletion_errors:
+            st.error(
+                "Some schedules could not be deleted:"
+            )
+
+            for error_message in deletion_errors:
+                st.write(f"• {error_message}")
+
+        else:
+            st.toast(
+                f"{successfully_deleted} "
+                f"{'schedule was' if successfully_deleted == 1 else 'schedules were'} "
+                "deleted.",
+                icon="✅"
+            )
+
+            st.rerun()
+
+    # ----------------------------------------------
+    # SCHEDULE LIST
+    # ----------------------------------------------
     for schedule in schedules:
         schedule_id = schedule.get("id")
         medicine = schedule.get(
@@ -440,20 +530,29 @@ else:
             ""
         )
 
-        information_column, delete_column = st.columns([4, 1.3])
+        checkbox_column, information_column = st.columns(
+            [0.45, 5]
+        )
+
+        # Checkbox appears before the schedule card.
+        with checkbox_column:
+            st.checkbox(
+                "Select",
+                key=f"select_schedule_{schedule_id}",
+                label_visibility="collapsed",
+                help=f"Select {medicine}"
+            )
 
         with information_column:
-            # Build HTML without indentation so Markdown
-            # does not display it as a code block.
             card_html = (
                 '<div class="schedule-card">'
-                f'<div class="schedule-time">'
+                '<div class="schedule-time">'
                 f'⏰ {format_time(scheduled_time)}'
                 '</div>'
-                f'<div class="medicine-name">'
+                '<div class="medicine-name">'
                 f'💊 {medicine}'
                 '</div>'
-                f'<div class="schedule-detail">'
+                '<div class="schedule-detail">'
                 f'📅 {format_date(scheduled_date)}'
                 f' &nbsp;|&nbsp; Slot {slot}'
                 '</div>'
@@ -464,83 +563,6 @@ else:
                 card_html,
                 unsafe_allow_html=True
             )
-
-        with delete_column:
-            confirm_delete = st.checkbox(
-                "Confirm",
-                key=f"confirm_{schedule_id}",
-                help="Check this box before deleting."
-            )
-
-            if st.button(
-                "🗑️ Delete",
-                key=f"delete_{schedule_id}",
-                disabled=not confirm_delete,
-                use_container_width=True
-            ):
-                try:
-                    delete_schedule(schedule_id)
-
-                    st.toast(
-                        f"{medicine} was deleted.",
-                        icon="✅"
-                    )
-
-                    st.rerun()
-
-                except PermissionError as error:
-                    st.error(str(error))
-
-                except ValueError as error:
-                    st.error(str(error))
-
-                except Exception as error:
-                    st.error(
-                        "Deletion failed because of a database error."
-                    )
-                    st.exception(error)
-
-# --------------------------------------------------
-# DELETE CONFIRMATION
-# --------------------------------------------------
-pending_delete = st.session_state.get("pending_delete")
-
-if pending_delete:
-    st.warning(
-        f"Are you sure you want to remove "
-        f"**{pending_delete['medicine_name']}** scheduled at "
-        f"**{format_time(pending_delete['dispense_time'])}**?"
-    )
-
-    confirm_column, cancel_column = st.columns(2)
-
-    with confirm_column:
-        if st.button(
-            "Yes, Delete",
-            type="primary",
-            use_container_width=True
-        ):
-            try:
-                delete_schedule(pending_delete["id"])
-                del st.session_state["pending_delete"]
-
-                st.success("The medicine schedule was deleted.")
-                st.rerun()
-
-            except Exception as error:
-                st.error(
-                    "The schedule could not be deleted."
-                )
-                st.exception(error)
-
-    with cancel_column:
-        if st.button(
-            "Cancel",
-            use_container_width=True
-        ):
-            del st.session_state["pending_delete"]
-            st.rerun()
-
 # --------------------------------------------------
 # FOOTER
 # --------------------------------------------------
