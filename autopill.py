@@ -1,1329 +1,741 @@
-import streamlit as st
-from datetime import datetime, date, timedelta
-from pathlib import Path
-from html import escape
-from supabase import create_client, Client
 import math
+from datetime import date, datetime, timedelta
+from html import escape
+from pathlib import Path
+from uuid import uuid4
 
-# --------------------------------------------------
-# PAGE CONFIGURATION
-# --------------------------------------------------
+import streamlit as st
+from supabase import Client, create_client
+
+
 st.set_page_config(
     page_title="Smart Pill Dispenser",
     page_icon="💊",
-    layout="centered"
+    layout="centered",
 )
 
-# --------------------------------------------------
-# MODERN AND ACCESSIBLE DESIGN
-# --------------------------------------------------
+
 st.markdown(
     """
     <style>
-    .stApp {
-        background-color: #f4f8fb;
-    }
-
-    .block-container {
-        max-width: 850px;
-        padding-top: 2rem;
-        padding-bottom: 3rem;
-    }
-
-    .app-header {
-        text-align: center;
-        margin-bottom: 1.5rem;
-    }
-
-    .app-title {
-        color: #12304a;
-        font-size: 2.3rem;
-        font-weight: 800;
-        margin-bottom: 0.3rem;
-    }
-
-    .app-subtitle {
-        color: #536b7c;
-        font-size: 1.15rem;
-    }
-
-    .section-heading {
-        color: #12304a;
-        font-size: 1.65rem;
-        font-weight: 800;
-        margin: 1rem 0;
-    }
-
-    .schedule-card {
-        background-color: white;
-        border: 1px solid #d9e4ec;
-        border-left: 7px solid #16856f;
-        border-radius: 14px;
-        padding: 15px 18px;
-        margin-bottom: 8px;
-        box-shadow: 0 3px 10px rgba(25, 61, 89, 0.06);
-    }
-
-    .schedule-time {
-        color: #12304a;
-        font-size: 1.4rem;
-        font-weight: 800;
-        margin-bottom: 5px;
-    }
-
-    .medicine-name {
-        color: #16856f;
-        font-size: 1.15rem;
-        font-weight: 700;
-    }
-
-    .schedule-detail {
-        color: #536b7c;
-        font-size: 1rem;
-        margin-top: 3px;
-    }
-
+    .stApp { background-color: #f4f8fb; }
+    .block-container { max-width: 980px; padding-top: 2rem; padding-bottom: 3rem; }
+    .app-header { text-align: center; margin-bottom: 1.5rem; }
+    .app-title { color: #12304a; font-size: 2.3rem; font-weight: 800; }
+    .app-subtitle { color: #536b7c; font-size: 1.15rem; }
+    .section-heading { color: #12304a; font-size: 1.65rem; font-weight: 800; margin: 1rem 0; }
+    .table-header { color: #36566e; font-size: .92rem; font-weight: 800; }
+    .medicine-cell { color: #16856f; font-size: 1.05rem; font-weight: 800; }
+    .row-text { color: #36566e; font-size: .98rem; line-height: 1.45; }
     .empty-schedule {
-        background-color: #fff8e6;
-        border: 1px solid #f0d78c;
-        border-radius: 14px;
-        padding: 1.3rem;
-        text-align: center;
-        color: #614d18;
-        font-size: 1.1rem;
+        background-color: #fff8e6; border: 1px solid #f0d78c;
+        border-radius: 14px; padding: 1.3rem; text-align: center;
+        color: #614d18; font-size: 1.1rem;
     }
-
     div[data-testid="stButton"] button {
-        border-radius: 10px;
-        font-size: 1rem;
-        font-weight: 700;
+        border-radius: 9px; font-size: .95rem; font-weight: 700;
     }
-
-    div[data-testid="stNumberInput"] label,
     div[data-testid="stTextInput"] label,
     div[data-testid="stDateInput"] label,
-    div[data-testid="stSelectbox"] label,
     div[data-testid="stMultiSelect"] label {
-        color: #12304a;
-        font-size: 1.05rem;
-        font-weight: 700;
+        color: #12304a; font-size: 1.02rem; font-weight: 700;
     }
-
-    @media (max-width: 600px) {
-        .app-title {
-            font-size: 1.8rem;
-        }
-
-        .schedule-time {
-            font-size: 1.2rem;
-        }
+    @media (max-width: 700px) {
+        .app-title { font-size: 1.8rem; }
+        .table-header { font-size: .78rem; }
+        .row-text, .medicine-cell { font-size: .86rem; }
     }
     </style>
     """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
-# --------------------------------------------------
-# SUPABASE CONNECTION
-# --------------------------------------------------
+
 @st.cache_resource
 def initialize_supabase() -> Client:
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_ANON_KEY"]
-
-    return create_client(url, key)
+    return create_client(
+        st.secrets["SUPABASE_URL"],
+        st.secrets["SUPABASE_ANON_KEY"],
+    )
 
 
 supabase = initialize_supabase()
 
-# --------------------------------------------------
-# HELPER FUNCTIONS
-# --------------------------------------------------
-def format_time(time_string):
-    """Convert a 24-hour time to a readable 12-hour time."""
-    if not time_string:
-        return "Time not provided"
 
-    clean_time = str(time_string).split("+")[0]
+# -----------------------------------------------------------------------------
+# Formatting and database helpers
+# -----------------------------------------------------------------------------
+def normalize_time(value):
+    if not value:
+        return ""
+    return str(value).split("+")[0][:5]
 
+
+def format_time(value):
     try:
-        parsed_time = datetime.strptime(
-            clean_time[:5],
-            "%H:%M"
-        )
-
-        return parsed_time.strftime("%I:%M %p").lstrip("0")
-
-    except ValueError:
-        return str(time_string)
+        parsed = datetime.strptime(normalize_time(value), "%H:%M")
+        return parsed.strftime("%I:%M %p").lstrip("0")
+    except (TypeError, ValueError):
+        return str(value or "Time not provided")
 
 
-def format_date(date_string):
-    """Convert a database date to a readable date."""
+def format_date(value):
     try:
-        parsed_date = datetime.strptime(
-            str(date_string),
-            "%Y-%m-%d"
-        )
-
-        return parsed_date.strftime("%B %d, %Y")
-
-    except ValueError:
-        return str(date_string)
+        parsed = datetime.strptime(str(value), "%Y-%m-%d")
+        return parsed.strftime("%b. %d, %Y")
+    except (TypeError, ValueError):
+        return str(value or "Date not provided")
 
 
-def create_date_range(start_date, end_date):
-    """Create a list containing every date in the range."""
-    number_of_days = (end_date - start_date).days
+def format_date_range(start_value, end_value):
+    if str(start_value) == str(end_value):
+        return format_date(start_value)
+    return f"{format_date(start_value)} – {format_date(end_value)}"
 
-    return [
-        start_date + timedelta(days=offset)
-        for offset in range(number_of_days + 1)
-    ]
+
+def date_range(start_date, end_date):
+    days = (end_date - start_date).days
+    return [start_date + timedelta(days=offset) for offset in range(days + 1)]
+
+
+def event_key(dispense_date, dispense_time):
+    return str(dispense_date), normalize_time(dispense_time)
 
 
 def get_schedules():
-    """Retrieve all saved medicine schedules."""
     response = (
-        supabase
-        .table("medicines")
+        supabase.table("medicines")
         .select("*")
         .order("dispense_date")
         .order("dispense_time")
         .execute()
     )
-
     return response.data or []
 
 
-def normalize_database_time(time_value):
-    """Normalize a Supabase time value to HH:MM."""
-    if not time_value:
-        return ""
-
-    return str(time_value).split("+")[0][:5]
-
-
-def get_existing_schedule_keys(start_date, end_date):
-    """Retrieve existing schedules within the selected date range."""
-    response = (
-        supabase
-        .table("medicines")
-        .select(
-            "slot_number,"
-            "medicine_name,"
-            "dispense_date,"
-            "dispense_time"
-        )
-        .gte("dispense_date", str(start_date))
-        .lte("dispense_date", str(end_date))
-        .execute()
-    )
-
-    existing_keys = set()
-
-    for schedule in response.data or []:
-        existing_keys.add(
-            (
-                int(schedule.get("slot_number", 0)),
-                str(schedule.get("medicine_name", "")).strip().casefold(),
-                str(schedule.get("dispense_date", "")),
-                normalize_database_time(
-                    schedule.get("dispense_time")
-                )
-            )
-        )
-
-    return existing_keys
-
-
 def get_future_schedules():
-    """Retrieve all current and future schedules."""
     response = (
-        supabase
-        .table("medicines")
+        supabase.table("medicines")
         .select("*")
         .gte("dispense_date", str(date.today()))
         .order("dispense_date")
         .order("dispense_time")
         .execute()
     )
-
     return response.data or []
 
 
-def schedule_event_key(dispense_date, dispense_time):
-    """Create a sortable date-and-time key."""
-    return (
-        str(dispense_date),
-        normalize_database_time(dispense_time)
+def record_group_key(record):
+    group_id = record.get("schedule_group_id")
+    if group_id:
+        return f"group:{group_id}"
+    return f"legacy:{record.get('id')}"
+
+
+def group_schedules(records):
+    """Turn generated daily records back into one display row per medicine plan."""
+    grouped = {}
+
+    for record in records:
+        key = record_group_key(record)
+        group = grouped.setdefault(
+            key,
+            {
+                "key": key,
+                "group_id": record.get("schedule_group_id"),
+                "record_ids": [],
+                "medicine_name": str(record.get("medicine_name", "Unnamed medicine")),
+                "dates": set(),
+                "times": set(),
+            },
+        )
+        group["record_ids"].append(record.get("id"))
+        group["dates"].add(str(record.get("dispense_date", "")))
+        group["times"].add(normalize_time(record.get("dispense_time")))
+
+    plans = []
+    for group in grouped.values():
+        dates = sorted(value for value in group["dates"] if value)
+        times = sorted(value for value in group["times"] if value)
+        if dates:
+            group["start_date"] = dates[0]
+            group["end_date"] = dates[-1]
+        else:
+            group["start_date"] = ""
+            group["end_date"] = ""
+        group["times"] = times
+        plans.append(group)
+
+    return sorted(
+        plans,
+        key=lambda item: (
+            item["start_date"],
+            item["times"][0] if item["times"] else "",
+            item["medicine_name"].casefold(),
+        ),
     )
+
+
+def delete_plan(plan):
+    """Delete all generated records belonging to one displayed medicine row."""
+    if plan.get("group_id"):
+        (
+            supabase.table("medicines")
+            .delete()
+            .eq("schedule_group_id", plan["group_id"])
+            .execute()
+        )
+        verification = (
+            supabase.table("medicines")
+            .select("id")
+            .eq("schedule_group_id", plan["group_id"])
+            .execute()
+        )
+    else:
+        record_id = plan["record_ids"][0]
+        (
+            supabase.table("medicines")
+            .delete()
+            .eq("id", record_id)
+            .execute()
+        )
+        verification = (
+            supabase.table("medicines")
+            .select("id")
+            .eq("id", record_id)
+            .execute()
+        )
+
+    if verification.data:
+        raise PermissionError("Supabase blocked the deletion. Check the DELETE policy.")
 
 
 def reassign_future_slots():
-    """
-    Reassign slots chronologically.
-
-    Medicines with the same date and time share the same slot.
-    """
-    future_schedules = get_future_schedules()
-
-    event_keys = sorted(
+    schedules = get_future_schedules()
+    events = sorted(
         {
-            schedule_event_key(
-                schedule.get("dispense_date"),
-                schedule.get("dispense_time")
-            )
-            for schedule in future_schedules
+            event_key(item.get("dispense_date"), item.get("dispense_time"))
+            for item in schedules
         }
     )
-
-    if len(event_keys) > 15:
+    if len(events) > 15:
         raise ValueError(
-            f"The dispenser has only 15 slots, but there are "
-            f"{len(event_keys)} different dispensing events."
+            f"The dispenser has 15 slots, but {len(events)} dispensing events exist."
         )
 
-    slot_assignment = {
-        event_key: slot_number
-        for slot_number, event_key in enumerate(
-            event_keys,
-            start=1
-        )
-    }
-
-    for schedule in future_schedules:
-        schedule_id = schedule.get("id")
-
-        event_key = schedule_event_key(
-            schedule.get("dispense_date"),
-            schedule.get("dispense_time")
-        )
-
-        assigned_slot = slot_assignment[event_key]
-
-        if schedule.get("slot_number") != assigned_slot:
+    assignments = {item: index for index, item in enumerate(events, start=1)}
+    for schedule in schedules:
+        assigned_slot = assignments[
+            event_key(schedule.get("dispense_date"), schedule.get("dispense_time"))
+        ]
+        if int(schedule.get("slot_number") or 0) != assigned_slot:
             (
-                supabase
-                .table("medicines")
-                .update({
-                    "slot_number": assigned_slot
-                })
-                .eq("id", schedule_id)
+                supabase.table("medicines")
+                .update({"slot_number": assigned_slot})
+                .eq("id", schedule.get("id"))
                 .execute()
             )
 
 
-def save_multiple_schedules(
-    start_date,
-    end_date,
-    medicine_entries
-):
-    """
-    Save schedules and assign slots according to date and time.
+def plan_matches_excluded_group(record, excluded_plan):
+    if not excluded_plan:
+        return False
+    if excluded_plan.get("group_id"):
+        return str(record.get("schedule_group_id")) == str(excluded_plan["group_id"])
+    return record.get("id") in excluded_plan.get("record_ids", [])
 
-    Medicines scheduled together share one slot.
-    """
-    future_schedules = get_future_schedules()
 
-    existing_schedule_keys = {
+def save_plans(start_date, end_date, medicine_entries, editing_plan=None):
+    """
+    Save one group per medicine. When editing, safely replace the selected group.
+    Medicines due at the same date and time share one physical slot.
+    """
+    future_records = get_future_schedules()
+    retained_records = [
+        record
+        for record in future_records
+        if not plan_matches_excluded_group(record, editing_plan)
+    ]
+
+    existing_keys = {
         (
-            str(schedule.get("medicine_name", ""))
-            .strip()
-            .casefold(),
-            str(schedule.get("dispense_date", "")),
-            normalize_database_time(
-                schedule.get("dispense_time")
-            )
+            str(record.get("medicine_name", "")).strip().casefold(),
+            str(record.get("dispense_date", "")),
+            normalize_time(record.get("dispense_time")),
         )
-        for schedule in future_schedules
+        for record in retained_records
     }
-
-    existing_event_keys = {
-        schedule_event_key(
-            schedule.get("dispense_date"),
-            schedule.get("dispense_time")
-        )
-        for schedule in future_schedules
+    retained_events = {
+        event_key(record.get("dispense_date"), record.get("dispense_time"))
+        for record in retained_records
     }
 
     candidate_records = []
-    candidate_schedule_keys = set()
-    candidate_event_keys = set()
-    skipped_count = 0
+    candidate_keys = set()
+    candidate_events = set()
+    skipped = 0
+    new_group_ids = []
 
-    for scheduled_date in create_date_range(
-        start_date,
-        end_date
-    ):
-        for medicine_entry in medicine_entries:
-            for scheduled_time in medicine_entry["times"]:
-                schedule_key = (
-                    medicine_entry["medicine"].casefold(),
+    for entry in medicine_entries:
+        group_id = str(uuid4())
+        new_group_ids.append(group_id)
+        for scheduled_date in date_range(start_date, end_date):
+            for scheduled_time in entry["times"]:
+                key = (
+                    entry["medicine"].casefold(),
                     str(scheduled_date),
-                    scheduled_time
+                    scheduled_time,
                 )
-
-                event_key = schedule_event_key(
-                    scheduled_date,
-                    scheduled_time
-                )
-
-                if (
-                    schedule_key in existing_schedule_keys
-                    or schedule_key in candidate_schedule_keys
-                ):
-                    skipped_count += 1
+                if key in existing_keys or key in candidate_keys:
+                    skipped += 1
                     continue
-
+                candidate_keys.add(key)
+                candidate_events.add(event_key(scheduled_date, scheduled_time))
                 candidate_records.append(
                     {
-                        "medicine_name":
-                            medicine_entry["medicine"],
-                        "dispense_date":
-                            str(scheduled_date),
-                        "dispense_time":
-                            scheduled_time
+                        "schedule_group_id": group_id,
+                        "medicine_name": entry["medicine"],
+                        "dispense_date": str(scheduled_date),
+                        "dispense_time": scheduled_time,
                     }
                 )
 
-                candidate_schedule_keys.add(schedule_key)
-                candidate_event_keys.add(event_key)
-
-    all_event_keys = sorted(
-        existing_event_keys | candidate_event_keys
-    )
-
-    if len(all_event_keys) > 15:
+    all_events = sorted(retained_events | candidate_events)
+    if len(all_events) > 15:
         raise ValueError(
-            f"This schedule requires {len(all_event_keys)} slots, "
-            "but the dispenser has only 15. Reduce the date range "
-            "or the number of different dispensing times."
+            f"This plan needs {len(all_events)} dispensing slots, but only 15 are available. "
+            "Reduce the date range or the number of different dispensing times."
         )
 
-    slot_assignment = {
-        event_key: slot_number
-        for slot_number, event_key in enumerate(
-            all_event_keys,
-            start=1
-        )
-    }
+    if not candidate_records:
+        return 0, skipped
 
-    # Assign a slot to every new record.
+    assignments = {item: index for index, item in enumerate(all_events, start=1)}
     for record in candidate_records:
-        event_key = schedule_event_key(
-            record["dispense_date"],
-            record["dispense_time"]
-        )
-
-        record["slot_number"] = slot_assignment[event_key]
-
-    # Insert records in batches.
-    batch_size = 500
-
-    for start_index in range(
-        0,
-        len(candidate_records),
-        batch_size
-    ):
-        current_batch = candidate_records[
-            start_index:start_index + batch_size
+        record["slot_number"] = assignments[
+            event_key(record["dispense_date"], record["dispense_time"])
         ]
 
-        (
-            supabase
-            .table("medicines")
-            .insert(current_batch)
-            .execute()
-        )
+    # Insert the replacement first. If insertion fails, the old plan remains intact.
+    supabase.table("medicines").insert(candidate_records).execute()
 
-    # Existing records may need to move if an earlier
-    # date or time was added.
-    reassign_future_slots()
-
-    return len(candidate_records), skipped_count
-
-
-def delete_schedule(schedule_id):
-    """Delete one schedule and verify that it was removed."""
-    if schedule_id is None:
-        raise ValueError(
-            "This medicine record has no ID."
-        )
-
-    (
-        supabase
-        .table("medicines")
-        .delete()
-        .eq("id", schedule_id)
-        .execute()
-    )
-
-    verification = (
-        supabase
-        .table("medicines")
-        .select("id")
-        .eq("id", schedule_id)
-        .execute()
-    )
-
-    if verification.data:
-        raise PermissionError(
-            "Supabase blocked the deletion. "
-            "Check the DELETE policy."
-        )
-
-def get_slot_medicines(schedules):
-    """
-    Organize current and future medicines according to slot.
-
-    Repeated schedules for the same medicine are shown only once.
-    """
-    slot_medicines = {
-        slot_number: set()
-        for slot_number in range(1, 16)
-    }
-
-    today_string = str(date.today())
-
-    for schedule in schedules:
-        dispense_date = str(
-            schedule.get("dispense_date", "")
-        )
-
-        # Do not include expired schedules in the loading guide.
-        if dispense_date and dispense_date < today_string:
-            continue
-
+    if editing_plan:
         try:
-            slot_number = int(
-                schedule.get("slot_number", 0)
-            )
+            delete_plan(editing_plan)
+        except Exception:
+            # Roll back the newly inserted replacement when the old plan cannot be removed.
+            for group_id in new_group_ids:
+                (
+                    supabase.table("medicines")
+                    .delete()
+                    .eq("schedule_group_id", group_id)
+                    .execute()
+                )
+            raise
+
+    reassign_future_slots()
+    return len(candidate_records), skipped
+
+
+# -----------------------------------------------------------------------------
+# Circular loading guide
+# -----------------------------------------------------------------------------
+def get_slot_medicines(schedules):
+    slots = {slot: set() for slot in range(1, 16)}
+    today_text = str(date.today())
+    for schedule in schedules:
+        if str(schedule.get("dispense_date", "")) < today_text:
+            continue
+        try:
+            slot = int(schedule.get("slot_number", 0))
         except (TypeError, ValueError):
             continue
-
-        medicine_name = str(
-            schedule.get("medicine_name", "")
-        ).strip()
-
-        if (
-            1 <= slot_number <= 15
-            and medicine_name
-        ):
-            slot_medicines[slot_number].add(
-                medicine_name
-            )
-
-    return slot_medicines
+        medicine = str(schedule.get("medicine_name", "")).strip()
+        if 1 <= slot <= 15 and medicine:
+            slots[slot].add(medicine)
+    return slots
 
 
-def shorten_medicine_name(medicine_names):
-    """Create a short label that fits inside a slot."""
-    if not medicine_names:
+def short_slot_label(names):
+    if not names:
         return "EMPTY"
-
-    if len(medicine_names) > 1:
-        return "MULTIPLE"
-
-    medicine_name = next(iter(medicine_names))
-
-    if len(medicine_name) > 13:
-        return medicine_name[:11] + "…"
-
-    return medicine_name
+    if len(names) > 1:
+        return f"{len(names)} MEDS"
+    name = next(iter(names))
+    return name if len(name) <= 13 else name[:11] + "…"
 
 
 def create_dispenser_svg(slot_medicines):
-    """
-    Create a circular 15-slot dispenser diagram.
-
-    Slot 1 is placed at the dispensing opening at the bottom.
-    Slot numbers increase clockwise because the motor turns
-    counterclockwise.
-    """
-    width = 700
-    height = 720
-    center_x = 350
-    center_y = 330
-    radius = 265
-    label_radius = 185
+    width, height = 700, 720
+    center_x, center_y, radius, label_radius = 350, 330, 265, 185
     slot_angle = 360 / 15
-
-    occupied_colors = [
-        "#B8E8E0",
-        "#A8DADC",
-        "#BDE0FE",
-        "#CDE7FF",
-        "#D7E3FC"
+    colors = ["#B8E8E0", "#A8DADC", "#BDE0FE", "#CDE7FF", "#D7E3FC"]
+    svg = [
+        f'<svg viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg" '
+        'style="width:100%;max-width:700px;height:auto">'
     ]
 
-    empty_color = "#EEF3F6"
-
-    svg_parts = [
-        (
-            f'<svg viewBox="0 0 {width} {height}" '
-            'xmlns="http://www.w3.org/2000/svg" '
-            'style="width:100%; max-width:700px; height:auto;">'
-        ),
-        (
-            '<rect width="100%" height="100%" '
-            'fill="transparent"/>'
-        )
-    ]
-
-    for slot_number in range(1, 16):
-        # Slot 1 is centered at 90 degrees, or the bottom.
-        # Increasing SVG angles move clockwise.
-        center_angle = 90 + (
-            (slot_number - 1) * slot_angle
-        )
-
-        start_angle = center_angle - slot_angle / 2
-        end_angle = center_angle + slot_angle / 2
-
-        start_radians = math.radians(start_angle)
-        end_radians = math.radians(end_angle)
-        center_radians = math.radians(center_angle)
-
-        start_x = (
-            center_x
-            + radius * math.cos(start_radians)
-        )
-        start_y = (
-            center_y
-            + radius * math.sin(start_radians)
-        )
-
-        end_x = (
-            center_x
-            + radius * math.cos(end_radians)
-        )
-        end_y = (
-            center_y
-            + radius * math.sin(end_radians)
-        )
-
-        label_x = (
-            center_x
-            + label_radius * math.cos(center_radians)
-        )
-        label_y = (
-            center_y
-            + label_radius * math.sin(center_radians)
-        )
-
-        medicine_names = slot_medicines.get(
-            slot_number,
-            set()
-        )
-
-        if medicine_names:
-            fill_color = occupied_colors[
-                (slot_number - 1) % len(occupied_colors)
-            ]
-        else:
-            fill_color = empty_color
-
-        short_name = escape(
-            shorten_medicine_name(medicine_names)
-        )
-
+    for slot in range(1, 16):
+        middle = 90 + (slot - 1) * slot_angle
+        start = math.radians(middle - slot_angle / 2)
+        end = math.radians(middle + slot_angle / 2)
+        label = math.radians(middle)
+        x1, y1 = center_x + radius * math.cos(start), center_y + radius * math.sin(start)
+        x2, y2 = center_x + radius * math.cos(end), center_y + radius * math.sin(end)
+        lx = center_x + label_radius * math.cos(label)
+        ly = center_y + label_radius * math.sin(label)
+        names = slot_medicines.get(slot, set())
+        fill = colors[(slot - 1) % len(colors)] if names else "#EEF3F6"
+        text = escape(short_slot_label(names))
         path = (
-            f"M {center_x} {center_y} "
-            f"L {start_x:.2f} {start_y:.2f} "
-            f"A {radius} {radius} 0 0 1 "
-            f"{end_x:.2f} {end_y:.2f} Z"
+            f"M {center_x} {center_y} L {x1:.2f} {y1:.2f} "
+            f"A {radius} {radius} 0 0 1 {x2:.2f} {y2:.2f} Z"
+        )
+        svg.append(f'<path d="{path}" fill="{fill}" stroke="#fff" stroke-width="4"/>')
+        svg.append(
+            f'<text x="{lx:.2f}" y="{ly - 7:.2f}" text-anchor="middle" '
+            f'font-family="Arial" font-size="18" font-weight="800" fill="#12304A">{slot}</text>'
+        )
+        svg.append(
+            f'<text x="{lx:.2f}" y="{ly + 13:.2f}" text-anchor="middle" '
+            f'font-family="Arial" font-size="10" font-weight="700" fill="#36566E">{text}</text>'
         )
 
-        svg_parts.append(
-            f'<path d="{path}" '
-            f'fill="{fill_color}" '
-            'stroke="#FFFFFF" '
-            'stroke-width="4"/>'
-        )
-
-        svg_parts.append(
-            f'<text x="{label_x:.2f}" '
-            f'y="{label_y - 7:.2f}" '
-            'text-anchor="middle" '
-            'font-family="Arial, sans-serif" '
-            'font-size="18" '
-            'font-weight="800" '
-            'fill="#12304A">'
-            f'{slot_number}'
-            '</text>'
-        )
-
-        svg_parts.append(
-            f'<text x="{label_x:.2f}" '
-            f'y="{label_y + 13:.2f}" '
-            'text-anchor="middle" '
-            'font-family="Arial, sans-serif" '
-            'font-size="10" '
-            'font-weight="700" '
-            'fill="#36566E">'
-            f'{short_name}'
-            '</text>'
-        )
-
-    # Center circle and motor direction
-    svg_parts.extend(
+    svg.extend(
         [
-            (
-                f'<circle cx="{center_x}" '
-                f'cy="{center_y}" r="82" '
-                'fill="#12304A" '
-                'stroke="#FFFFFF" '
-                'stroke-width="5"/>'
-            ),
-            (
-                f'<text x="{center_x}" '
-                f'y="{center_y - 7}" '
-                'text-anchor="middle" '
-                'font-family="Arial, sans-serif" '
-                'font-size="45" '
-                'font-weight="800" '
-                'fill="#FFFFFF">↺</text>'
-            ),
-            (
-                f'<text x="{center_x}" '
-                f'y="{center_y + 24}" '
-                'text-anchor="middle" '
-                'font-family="Arial, sans-serif" '
-                'font-size="12" '
-                'font-weight="700" '
-                'fill="#FFFFFF">'
-                'COUNTERCLOCKWISE'
-                '</text>'
-            ),
-            # Dispensing opening marker
-            (
-                f'<path d="M {center_x - 24} 610 '
-                f'L {center_x} 635 '
-                f'L {center_x + 24} 610 Z" '
-                'fill="#FF6B5F"/>'
-            ),
-            (
-                f'<text x="{center_x}" y="670" '
-                'text-anchor="middle" '
-                'font-family="Arial, sans-serif" '
-                'font-size="16" '
-                'font-weight="800" '
-                'fill="#12304A">'
-                'DISPENSING OPENING / HOME POSITION'
-                '</text>'
-            ),
-            (
-                f'<text x="{center_x}" y="695" '
-                'text-anchor="middle" '
-                'font-family="Arial, sans-serif" '
-                'font-size="14" '
-                'fill="#536B7C">'
-                'Align Slot 1 with this opening before loading'
-                '</text>'
-            ),
-            '</svg>'
+            f'<circle cx="{center_x}" cy="{center_y}" r="82" fill="#12304A" stroke="#fff" stroke-width="5"/>',
+            f'<text x="{center_x}" y="{center_y - 7}" text-anchor="middle" font-family="Arial" '
+            'font-size="45" font-weight="800" fill="#fff">↺</text>',
+            f'<text x="{center_x}" y="{center_y + 24}" text-anchor="middle" font-family="Arial" '
+            'font-size="12" font-weight="700" fill="#fff">COUNTERCLOCKWISE</text>',
+            f'<path d="M {center_x - 24} 610 L {center_x} 635 L {center_x + 24} 610 Z" fill="#FF6B5F"/>',
+            f'<text x="{center_x}" y="670" text-anchor="middle" font-family="Arial" '
+            'font-size="16" font-weight="800" fill="#12304A">DISPENSING OPENING / HOME</text>',
+            f'<text x="{center_x}" y="695" text-anchor="middle" font-family="Arial" '
+            'font-size="14" fill="#536B7C">Align Slot 1 with this opening</text>',
+            "</svg>",
         ]
     )
+    return "".join(svg)
 
-    return "".join(svg_parts)
 
-# --------------------------------------------------
-# SESSION STATE
-# --------------------------------------------------
+# -----------------------------------------------------------------------------
+# Form state helpers
+# -----------------------------------------------------------------------------
+def clear_form_widget_state():
+    prefixes = ("plan_medicine_", "plan_times_")
+    for key in list(st.session_state.keys()):
+        if key.startswith(prefixes) or key in {"plan_start_date", "plan_end_date"}:
+            del st.session_state[key]
+
+
+if "show_schedule_form" not in st.session_state:
+    st.session_state.show_schedule_form = False
 if "medicine_rows" not in st.session_state:
-    st.session_state["medicine_rows"] = [0]
-
+    st.session_state.medicine_rows = [0]
 if "next_medicine_row_id" not in st.session_state:
-    st.session_state["next_medicine_row_id"] = 1
+    st.session_state.next_medicine_row_id = 1
+if "editing_plan" not in st.session_state:
+    st.session_state.editing_plan = None
+if "pending_edit_plan" not in st.session_state:
+    st.session_state.pending_edit_plan = None
+if "pending_delete_plan" not in st.session_state:
+    st.session_state.pending_delete_plan = None
 
-# --------------------------------------------------
-# HEADER AND LOGO
-# --------------------------------------------------
+
+if st.session_state.pop("reset_form_pending", False):
+    clear_form_widget_state()
+    st.session_state.medicine_rows = [0]
+    st.session_state.next_medicine_row_id = 1
+    st.session_state.editing_plan = None
+
+
+pending_edit = st.session_state.pending_edit_plan
+if pending_edit:
+    clear_form_widget_state()
+    st.session_state.medicine_rows = [0]
+    st.session_state.next_medicine_row_id = 1
+    st.session_state.editing_plan = pending_edit
+    st.session_state.plan_start_date = datetime.strptime(
+        pending_edit["start_date"], "%Y-%m-%d"
+    ).date()
+    st.session_state.plan_end_date = datetime.strptime(
+        pending_edit["end_date"], "%Y-%m-%d"
+    ).date()
+    st.session_state.plan_medicine_0 = pending_edit["medicine_name"]
+    st.session_state.plan_times_0 = pending_edit["times"]
+    st.session_state.show_schedule_form = True
+    st.session_state.pending_edit_plan = None
+
+
+# -----------------------------------------------------------------------------
+# Header
+# -----------------------------------------------------------------------------
 logo_path = Path("pill_dispenser_logo.png")
-
 if logo_path.exists():
-    left_space, logo_column, right_space = st.columns(
-        [1, 1.1, 1]
-    )
-
+    _, logo_column, _ = st.columns([1, 1.1, 1])
     with logo_column:
-        st.image(
-            str(logo_path),
-            use_container_width=True
-        )
-
+        st.image(str(logo_path), use_container_width=True)
 else:
-    st.markdown(
-        "<div style='text-align:center; font-size:5rem;'>💊</div>",
-        unsafe_allow_html=True
-    )
+    st.markdown("<div style='text-align:center;font-size:5rem'>💊</div>", unsafe_allow_html=True)
 
 st.markdown(
     """
     <div class="app-header">
         <div class="app-title">Smart Pill Dispenser</div>
-        <div class="app-subtitle">
-            Schedule medicines safely and easily.
-        </div>
+        <div class="app-subtitle">Schedule medicines safely and easily.</div>
     </div>
     """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
-# --------------------------------------------------
-# TIME OPTIONS
-# --------------------------------------------------
+
 time_options = [
     f"{hour:02d}:{minute:02d}"
     for hour in range(24)
     for minute in range(0, 60, 5)
 ]
 
-display_time_options = {
-    database_time: format_time(database_time)
-    for database_time in time_options
-}
 
-# --------------------------------------------------
-# CREATE SCHEDULE
-# --------------------------------------------------
-st.markdown(
-    '<div class="section-heading">➕ Create Medicine Schedule</div>',
-    unsafe_allow_html=True
-)
+# -----------------------------------------------------------------------------
+# Hidden add/edit form
+# -----------------------------------------------------------------------------
+if not st.session_state.show_schedule_form:
+    add_column, _ = st.columns([1.7, 3])
+    with add_column:
+        if st.button("➕ Add Medicine Schedule", type="primary", use_container_width=True):
+            st.session_state.reset_form_pending = True
+            st.session_state.show_schedule_form = True
+            st.rerun()
 
-st.write(
-    "Choose the dates, then add each medicine and its "
-    "dispensing times."
-)
 
-# --------------------------------------------------
-# DATE RANGE
-# --------------------------------------------------
-st.markdown("#### 📅 Dispensing Dates")
+if st.session_state.show_schedule_form:
+    editing = st.session_state.editing_plan
+    title = "✏️ Edit Medicine Schedule" if editing else "➕ Add Medicine Schedule"
+    st.markdown(f'<div class="section-heading">{title}</div>', unsafe_allow_html=True)
 
-from_column, to_column = st.columns(2)
+    if "plan_start_date" not in st.session_state:
+        st.session_state.plan_start_date = date.today()
+    if "plan_end_date" not in st.session_state:
+        st.session_state.plan_end_date = st.session_state.plan_start_date
 
-with from_column:
-    start_date = st.date_input(
-        "From",
-        value=date.today(),
-        min_value=date.today(),
-        key="schedule_start_date"
-    )
+    minimum_form_date = min(date.today(), st.session_state.plan_start_date)
 
-with to_column:
-    end_date = st.date_input(
-        "To",
-        value=max(
-            start_date,
-            st.session_state.get(
-                "schedule_end_date",
-                start_date
-            )
-        ),
-        min_value=start_date,
-        key="schedule_end_date"
-    )
-
-date_range_is_valid = end_date >= start_date
-
-if not date_range_is_valid:
-    st.error(
-        "The ending date cannot be earlier than "
-        "the starting date."
-    )
-
-number_of_days = (
-    (end_date - start_date).days + 1
-    if date_range_is_valid
-    else 0
-)
-
-if date_range_is_valid:
-    st.info(
-        f"Schedules will be created from "
-        f"**{format_date(start_date)}** to "
-        f"**{format_date(end_date)}** "
-        f"({number_of_days} "
-        f"{'day' if number_of_days == 1 else 'days'})."
-    )
-
-# --------------------------------------------------
-# MEDICINE INPUTS
-# --------------------------------------------------
-st.markdown("#### 💊 Medicines and Times")
-
-for row_number, row_id in enumerate(
-    st.session_state["medicine_rows"],
-    start=1
-):
-    with st.container(border=True):
-        heading_column, remove_column = st.columns(
-            [4, 1.3]
+    from_column, to_column = st.columns(2)
+    with from_column:
+        start_date = st.date_input(
+            "From",
+            min_value=minimum_form_date,
+            key="plan_start_date",
+        )
+    with to_column:
+        if st.session_state.plan_end_date < start_date:
+            st.session_state.plan_end_date = start_date
+        end_date = st.date_input(
+            "To",
+            min_value=start_date,
+            key="plan_end_date",
         )
 
-        with heading_column:
-            st.markdown(
-                f"##### Medicine {row_number}"
+    for row_number, row_id in enumerate(st.session_state.medicine_rows, start=1):
+        with st.container(border=True):
+            heading_column, remove_column = st.columns([4, 1])
+            with heading_column:
+                st.markdown(f"**Medicine {row_number}**")
+            with remove_column:
+                if not editing and len(st.session_state.medicine_rows) > 1:
+                    if st.button("✕", key=f"remove_row_{row_id}", help="Remove medicine"):
+                        st.session_state.medicine_rows.remove(row_id)
+                        st.rerun()
+
+            st.text_input(
+                "Medicine Name",
+                placeholder="Example: Paracetamol",
+                key=f"plan_medicine_{row_id}",
+            )
+            st.multiselect(
+                "Dispensing Times",
+                options=time_options,
+                default=["08:00"],
+                format_func=format_time,
+                key=f"plan_times_{row_id}",
+                help="Select one or more times.",
             )
 
-        with remove_column:
-            if len(st.session_state["medicine_rows"]) > 1:
-                if st.button(
-                    "✕ Remove",
-                    key=f"remove_medicine_{row_id}",
-                    use_container_width=True
-                ):
-                    st.session_state["medicine_rows"].remove(
-                        row_id
-                    )
-                    st.rerun()
+    if not editing:
+        add_row_column, _ = st.columns([1.6, 3])
+        with add_row_column:
+            if st.button("➕ Add Another Medicine", use_container_width=True):
+                row_id = st.session_state.next_medicine_row_id
+                st.session_state.medicine_rows.append(row_id)
+                st.session_state.next_medicine_row_id += 1
+                st.rerun()
 
-        st.text_input(
-            "Medicine Name",
-            placeholder="Example: Paracetamol",
-            key=f"medicine_name_{row_id}",
-            help="The slot will be assigned automatically."
+    save_column, cancel_column = st.columns(2)
+    with save_column:
+        save_clicked = st.button(
+            "💾 Save Changes" if editing else "💾 Save Schedules",
+            type="primary",
+            use_container_width=True,
         )
-        st.multiselect(
-            "Dispensing Times",
-            options=time_options,
-            default=["08:00"],
-            format_func=lambda selected: (
-                display_time_options[selected]
-            ),
-            key=f"medicine_times_{row_id}",
-            help=(
-                "Select one or more dispensing times "
-                "for this medicine."
-            )
-        )
+    with cancel_column:
+        if st.button("Cancel", use_container_width=True):
+            st.session_state.show_schedule_form = False
+            st.session_state.reset_form_pending = True
+            st.rerun()
 
-# --------------------------------------------------
-# ADD ANOTHER MEDICINE
-# --------------------------------------------------
-add_medicine_column, blank_column = st.columns([2, 3])
+    if save_clicked:
+        entries, errors = [], []
+        for number, row_id in enumerate(st.session_state.medicine_rows, start=1):
+            name = st.session_state.get(f"plan_medicine_{row_id}", "").strip()
+            times = sorted(st.session_state.get(f"plan_times_{row_id}", []))
+            if not name:
+                errors.append(f"Enter the name of Medicine {number}.")
+            if not times:
+                errors.append(f"Select at least one time for Medicine {number}.")
+            if name and times:
+                entries.append({"medicine": name, "times": times})
 
-with add_medicine_column:
-    if st.button(
-        "➕ Add Another Medicine",
-        use_container_width=True
-    ):
-        new_row_id = st.session_state[
-            "next_medicine_row_id"
-        ]
+        if end_date < start_date:
+            errors.append("The ending date cannot be earlier than the starting date.")
 
-        st.session_state["medicine_rows"].append(
-            new_row_id
-        )
+        if errors:
+            for message in errors:
+                st.error(message)
+        else:
+            try:
+                saved, skipped = save_plans(start_date, end_date, entries, editing)
+                if saved:
+                    st.success("The medicine schedule was updated." if editing else "Medicine schedules saved.")
+                if skipped:
+                    st.warning(f"{skipped} duplicate record(s) were not added.")
+                st.session_state.show_schedule_form = False
+                st.session_state.reset_form_pending = True
+                st.rerun()
+            except ValueError as error:
+                st.error(str(error))
+            except Exception as error:
+                st.error("The schedule could not be saved. Check the Supabase connection and policies.")
+                st.exception(error)
 
-        st.session_state[
-            "next_medicine_row_id"
-        ] += 1
 
-        st.rerun()
-
-# --------------------------------------------------
-# PREVIEW TOTAL
-# --------------------------------------------------
-times_per_day = 0
-
-for row_id in st.session_state["medicine_rows"]:
-    preview_name = st.session_state.get(
-        f"medicine_name_{row_id}",
-        ""
-    ).strip()
-
-    preview_times = st.session_state.get(
-        f"medicine_times_{row_id}",
-        []
-    )
-
-    if preview_name and preview_times:
-        times_per_day += len(preview_times)
-
-total_preview_schedules = (
-    times_per_day * number_of_days
-)
-
-if total_preview_schedules:
-    st.info(
-        f"This will create up to "
-        f"**{total_preview_schedules} dispensing schedules**."
-    )
-
-# --------------------------------------------------
-# SAVE ALL SCHEDULES
-# --------------------------------------------------
-save_schedules_clicked = st.button(
-    "💾 Save All Schedules",
-    type="primary",
-    use_container_width=True,
-    disabled=not date_range_is_valid
-)
-
-if save_schedules_clicked:
-    medicine_entries = []
-    validation_errors = []
-
-    for row_number, row_id in enumerate(
-        st.session_state["medicine_rows"],
-        start=1
-    ):
-        medicine_name = st.session_state.get(
-            f"medicine_name_{row_id}",
-            ""
-        ).strip()
-
-        
-
-        medicine_times = st.session_state.get(
-            f"medicine_times_{row_id}",
-            []
-        )
-
-        if not medicine_name:
-            validation_errors.append(
-                f"Enter the name of Medicine {row_number}."
-            )
-
-        if not medicine_times:
-            validation_errors.append(
-                f"Select at least one time for "
-                f"Medicine {row_number}."
-            )
-
-        if medicine_name and medicine_times:
-            medicine_entries.append(
-                {
-                    "medicine": medicine_name,
-                    "times": sorted(medicine_times)
-                }
-            )
-
-    if validation_errors:
-        for validation_message in validation_errors:
-            st.error(validation_message)
-
-    elif not date_range_is_valid:
-        st.error(
-            "Please select a valid date range."
-        )
-
-    else:
-        try:
-            saved_count, skipped_count = (
-                save_multiple_schedules(
-                    start_date,
-                    end_date,
-                    medicine_entries
-                )
-            )
-
-            if saved_count:
-                st.success(
-                    f"{saved_count} dispensing "
-                    f"{'schedule was' if saved_count == 1 else 'schedules were'} "
-                    "saved successfully."
-                )
-
-            if skipped_count:
-                st.warning(
-                    f"{skipped_count} duplicate "
-                    f"{'schedule was' if skipped_count == 1 else 'schedules were'} "
-                    "not added."
-                )
-
-            if not saved_count and not skipped_count:
-                st.warning(
-                    "There were no schedules to save."
-                )
-        except ValueError as error:
-            st.error(str(error))
-
-        except Exception as error:
-            st.error(
-                "The schedules could not be saved. "
-                "Please check the Supabase connection."
-            )
-            st.exception(error)
-
-# --------------------------------------------------
-# DISPLAY EXISTING SCHEDULES
-# --------------------------------------------------
+# -----------------------------------------------------------------------------
+# Grouped four-column schedule list
+# -----------------------------------------------------------------------------
 st.markdown("---")
-
-st.markdown(
-    '<div class="section-heading">'
-    '📅 Existing Medicine Schedules'
-    '</div>',
-    unsafe_allow_html=True
-)
+st.markdown('<div class="section-heading">📅 Medicine Schedules</div>', unsafe_allow_html=True)
 
 try:
     schedules = get_schedules()
-
+    plans = group_schedules(schedules)
 except Exception as error:
-    schedules = []
-    st.error("The schedules could not be loaded.")
+    schedules, plans = [], []
+    st.error("Schedules could not be loaded.")
     st.exception(error)
-# --------------------------------------------------
-# MEDICINE LOADING GUIDE
-# --------------------------------------------------
-if schedules:
-    st.markdown(
-        '<div class="section-heading">'
-        '🍕 Medicine Loading Guide'
-        '</div>',
-        unsafe_allow_html=True
+
+
+pending_delete = st.session_state.pending_delete_plan
+if pending_delete:
+    st.warning(
+        f"Delete the complete schedule for **{pending_delete['medicine_name']}**? "
+        "All of its displayed dates and times will be removed."
     )
-
-    st.info(
-        "View the dispenser from above. Align Slot 1 with the "
-        "dispensing opening. Because the motor rotates "
-        "counterclockwise, the slot numbers increase clockwise."
-    )
-
-    slot_medicines = get_slot_medicines(schedules)
-
-    dispenser_svg = create_dispenser_svg(
-        slot_medicines
-    )
-
-    st.markdown(
-        dispenser_svg,
-        unsafe_allow_html=True
-    )
-
-    # Check for multiple medicines assigned to one slot.
-    conflicting_slots = {
-        slot: medicines
-        for slot, medicines in slot_medicines.items()
-        if len(medicines) > 1
-    }
-
-    if conflicting_slots:
-        st.error(
-            "Some slots have more than one medicine assigned. "
-            "Place only one medicine type in each slot."
-        )
-
-        for slot, medicines in conflicting_slots.items():
-            st.write(
-                f"**Slot {slot}:** "
-                + ", ".join(sorted(medicines))
-            )
-
-    # Exact loading list
-    st.markdown("#### Exact Slot Arrangement")
-
-    loading_list_found = False
-
-    for slot_number in range(1, 16):
-        medicine_names = slot_medicines[
-            slot_number
-        ]
-
-        if medicine_names:
-            loading_list_found = True
-
-            st.write(
-                f"**Slot {slot_number}:** "
-                + ", ".join(sorted(medicine_names))
-            )
-
-    if not loading_list_found:
-        st.warning(
-            "There are no current or future medicines to load."
-        )
-
-if not schedules:
-    st.markdown(
-        """
-<div class="empty-schedule">
-<strong>No medicines are scheduled yet.</strong><br>
-Complete the form above to add a schedule.
-</div>
-        """,
-        unsafe_allow_html=True
-    )
-
-else:
-    # Determine selected schedules using checkbox states.
-    selected_schedules = [
-        schedule
-        for schedule in schedules
-        if st.session_state.get(
-            f"select_schedule_{schedule.get('id')}",
-            False
-        )
-    ]
-
-    selected_ids = [
-        schedule["id"]
-        for schedule in selected_schedules
-        if schedule.get("id") is not None
-    ]
-
-    selected_count = len(selected_ids)
-
-    # ----------------------------------------------
-    # DELETE CHECKED BUTTON
-    # ----------------------------------------------
-    count_column, delete_column = st.columns([3, 1.35])
-
-    with count_column:
-        if selected_count:
-            st.info(
-                f"✓ {selected_count} "
-                f"{'schedule' if selected_count == 1 else 'schedules'} "
-                "selected"
-            )
-
-        else:
-            st.caption(
-                f"{len(schedules)} medicine "
-                f"{'schedule' if len(schedules) == 1 else 'schedules'}"
-            )
-
-    with delete_column:
-        delete_selected = st.button(
-            "🗑️ Delete Checked",
-            key="delete_checked_schedules",
-            disabled=selected_count == 0,
-            use_container_width=True
-        )
-
-    # ----------------------------------------------
-    # DELETE SELECTED RECORDS
-    # ----------------------------------------------
-    if delete_selected:
-        successfully_deleted = 0                                
-        deletion_errors = []
-
-        for schedule in selected_schedules:
-            schedule_id = schedule.get("id")
-            medicine = schedule.get(
-                "medicine_name",
-                "Unnamed medicine"
-            )
-
+    confirm_column, cancel_column, _ = st.columns([1.2, 1, 3])
+    with confirm_column:
+        if st.button("Yes, Delete", type="primary", use_container_width=True):
             try:
-                delete_schedule(schedule_id)
-                successfully_deleted += 1
-
+                delete_plan(pending_delete)
+                reassign_future_slots()
+                st.session_state.pending_delete_plan = None
+                st.rerun()
             except Exception as error:
-                deletion_errors.append(
-                    f"{medicine}: {str(error)}"
-                )
-
-        # Clear deleted checkbox states.
-        for schedule_id in selected_ids:
-            checkbox_key = (
-                f"select_schedule_{schedule_id}"
-            )
-
-            if checkbox_key in st.session_state:
-                del st.session_state[checkbox_key]
-
-        if deletion_errors:
-            st.error(
-                "Some schedules could not be deleted:"
-            )
-
-            for error_message in deletion_errors:
-                st.write(f"• {error_message}")
-
-        else:
-            st.toast(
-                f"{successfully_deleted} "
-                f"{'schedule was' if successfully_deleted == 1 else 'schedules were'} "
-                "deleted.",
-                icon="✅"
-            )
-
+                st.error("The schedule could not be deleted.")
+                st.exception(error)
+    with cancel_column:
+        if st.button("Cancel Delete", use_container_width=True):
+            st.session_state.pending_delete_plan = None
             st.rerun()
 
-        if successfully_deleted:
-            try:
-                reassign_future_slots()
-            except Exception as error:
-                deletion_errors.append(
-                    f"Slots could not be rearranged:{error}"
-                )
-    # ----------------------------------------------
-    # SCHEDULE LIST
-    # ----------------------------------------------
-    for schedule in schedules:
-        schedule_id = schedule.get("id")
 
-        medicine = str(
-            schedule.get(
-                "medicine_name",
-                "Unnamed medicine"
-            )
-        )
+if not plans:
+    st.markdown(
+        '<div class="empty-schedule"><strong>No medicine schedules yet.</strong><br>'
+        'Click “Add Medicine Schedule” to create one.</div>',
+        unsafe_allow_html=True,
+    )
+else:
+    name_header, dates_header, times_header, actions_header = st.columns([2.4, 2.35, 2.4, 1.15])
+    with name_header:
+        st.markdown('<div class="table-header">MEDICINE NAME</div>', unsafe_allow_html=True)
+    with dates_header:
+        st.markdown('<div class="table-header">DATES</div>', unsafe_allow_html=True)
+    with times_header:
+        st.markdown('<div class="table-header">TIME</div>', unsafe_allow_html=True)
+    with actions_header:
+        st.markdown('<div class="table-header">ACTIONS</div>', unsafe_allow_html=True)
+    st.markdown("---")
 
-        slot = schedule.get(
-            "slot_number",
-            "Not specified"
-        )
-
-        scheduled_date = schedule.get(
-            "dispense_date",
-            ""
-        )
-
-        scheduled_time = schedule.get(
-            "dispense_time",
-            ""
-        )
-
-        checkbox_column, information_column = st.columns(
-            [0.45, 5]
-        )
-
-        with checkbox_column:
-            st.checkbox(
-                "Select",
-                key=f"select_schedule_{schedule_id}",
-                label_visibility="collapsed",
-                help=f"Select {medicine}"
-            )
-
-        with information_column:
-            # Escape database text before placing it in HTML.
-            safe_medicine = escape(medicine)
-            safe_slot = escape(str(slot))
-
-            card_html = (
-                '<div class="schedule-card">'
-                '<div class="schedule-time">'
-                f'⏰ {format_time(scheduled_time)}'
-                '</div>'
-                '<div class="medicine-name">'
-                f'💊 {safe_medicine}'
-                '</div>'
-                '<div class="schedule-detail">'
-                f'📅 {format_date(scheduled_date)}'
-                f' &nbsp;|&nbsp; Slot {safe_slot}'
-                '</div>'
-                '</div>'
-            )
-
+    for index, plan in enumerate(plans):
+        name_column, dates_column, times_column, actions_column = st.columns([2.4, 2.35, 2.4, 1.15])
+        with name_column:
             st.markdown(
-                card_html,
-                unsafe_allow_html=True
+                f'<div class="medicine-cell">💊 {escape(plan["medicine_name"])}</div>',
+                unsafe_allow_html=True,
             )
+        with dates_column:
+            st.markdown(
+                f'<div class="row-text">{escape(format_date_range(plan["start_date"], plan["end_date"]))}</div>',
+                unsafe_allow_html=True,
+            )
+        with times_column:
+            time_text = ", ".join(format_time(value) for value in plan["times"])
+            st.markdown(f'<div class="row-text">{escape(time_text)}</div>', unsafe_allow_html=True)
+        with actions_column:
+            edit_column, delete_column = st.columns(2)
+            with edit_column:
+                if st.button(
+                    "✏️",
+                    key=f"edit_plan_{index}_{plan['key']}",
+                    help="Edit this schedule",
+                    disabled=st.session_state.show_schedule_form,
+                ):
+                    st.session_state.pending_edit_plan = plan
+                    st.rerun()
+            with delete_column:
+                if st.button(
+                    "🗑️",
+                    key=f"delete_plan_{index}_{plan['key']}",
+                    help="Delete this schedule",
+                    disabled=st.session_state.show_schedule_form,
+                ):
+                    st.session_state.pending_delete_plan = plan
+                    st.rerun()
+        st.markdown("---")
 
-# --------------------------------------------------
-# FOOTER
-# --------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Loading guide
+# -----------------------------------------------------------------------------
+future_schedules = [
+    item for item in schedules if str(item.get("dispense_date", "")) >= str(date.today())
+]
+if future_schedules:
+    st.markdown('<div class="section-heading">🍕 Medicine Loading Guide</div>', unsafe_allow_html=True)
+    st.info(
+        "View the dispenser from above. Align Slot 1 with the dispensing opening. "
+        "Because the motor rotates counterclockwise, slot numbers increase clockwise. "
+        "Medicines due together are placed together in the same slot."
+    )
+    slot_medicines = get_slot_medicines(future_schedules)
+    st.markdown(create_dispenser_svg(slot_medicines), unsafe_allow_html=True)
+    st.markdown("#### Exact Slot Arrangement")
+    for slot in range(1, 16):
+        names = slot_medicines[slot]
+        if names:
+            st.write(f"**Slot {slot}:** " + " + ".join(sorted(names)))
+
+
 st.markdown("---")
-
 st.caption(
-    "Before filling the dispenser, verify the medicine name, "
-    "slot number, dates, and dispensing times."
+    "Verify all medicines, dates, times, and loading positions before filling the dispenser."
 )
