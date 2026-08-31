@@ -358,26 +358,36 @@ if add_clicked:
 # DISPLAY EXISTING SCHEDULES
 # --------------------------------------------------
 st.markdown("---")
-st.markdown("### 📅 Existing Medicine Schedules")
+
+st.markdown(
+    """
+    <div style="
+        color: #12304a;
+        font-size: 1.65rem;
+        font-weight: 800;
+        margin: 1rem 0;
+    ">
+        📅 Existing Medicine Schedules
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
 try:
     schedules = get_schedules()
 
 except Exception as error:
     schedules = []
-
-    st.error(
-        "The schedules could not be loaded from the database."
-    )
+    st.error("The schedules could not be loaded.")
     st.exception(error)
 
 if not schedules:
     st.markdown(
         """
-        <div class="empty-schedule">
-            <strong>No medicines are scheduled yet.</strong><br>
-            Complete the form above to add a schedule.
-        </div>
+<div class="empty-schedule">
+<strong>No medicines are scheduled yet.</strong><br>
+Complete the form above to add a schedule.
+</div>
         """,
         unsafe_allow_html=True
     )
@@ -394,31 +404,41 @@ else:
             "medicine_name",
             "Unnamed medicine"
         )
-        slot = schedule.get("slot_number", "Not specified")
-        scheduled_date = schedule.get("dispense_date", "")
-        scheduled_time = schedule.get("dispense_time", "")
+        slot = schedule.get(
+            "slot_number",
+            "Not specified"
+        )
+        scheduled_date = schedule.get(
+            "dispense_date",
+            ""
+        )
+        scheduled_time = schedule.get(
+            "dispense_time",
+            ""
+        )
 
         information_column, delete_column = st.columns([4, 1.3])
 
         with information_column:
+            # Build HTML without indentation so Markdown
+            # does not display it as a code block.
+            card_html = (
+                '<div class="schedule-card">'
+                f'<div class="schedule-time">'
+                f'⏰ {format_time(scheduled_time)}'
+                '</div>'
+                f'<div class="medicine-name">'
+                f'💊 {medicine}'
+                '</div>'
+                f'<div class="schedule-detail">'
+                f'📅 {format_date(scheduled_date)}'
+                f' &nbsp;|&nbsp; Slot {slot}'
+                '</div>'
+                '</div>'
+            )
+
             st.markdown(
-                f"""
-                <div class="schedule-card">
-                    <div class="schedule-time">
-                        ⏰ {format_time(scheduled_time)}
-                    </div>
-
-                    <div class="medicine-name">
-                        💊 {medicine}
-                    </div>
-
-                    <div class="schedule-detail">
-                        📅 {format_date(scheduled_date)}
-                        &nbsp;&nbsp;|&nbsp;&nbsp;
-                        Slot {slot}
-                    </div>
-                </div>
-                """,
+                card_html,
                 unsafe_allow_html=True
             )
 
@@ -433,6 +453,8 @@ else:
                     "medicine_name": medicine,
                     "dispense_time": scheduled_time
                 }
+
+                st.rerun()
 
 # --------------------------------------------------
 # DELETE CONFIRMATION
