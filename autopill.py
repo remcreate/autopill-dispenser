@@ -237,25 +237,119 @@ def get_existing_schedule_keys(start_date, end_date):
     return existing_keys
 
 
+def get_future_schedules():
+    """Retrieve all current and future schedules."""
+    response = (
+        supabase
+        .table("medicines")
+        .select("*")
+        .gte("dispense_date", str(date.today()))
+        .order("dispense_date")
+        .order("dispense_time")
+        .execute()
+    )
+
+    return response.data or []
+
+
+def schedule_event_key(dispense_date, dispense_time):
+    """Create a sortable date-and-time key."""
+    return (
+        str(dispense_date),
+        normalize_database_time(dispense_time)
+    )
+
+
+def reassign_future_slots():
+    """
+    Reassign slots chronologically.
+
+    Medicines with the same date and time share the same slot.
+    """
+    future_schedules = get_future_schedules()
+
+    event_keys = sorted(
+        {
+            schedule_event_key(
+                schedule.get("dispense_date"),
+                schedule.get("dispense_time")
+            )
+            for schedule in future_schedules
+        }
+    )
+
+    if len(event_keys) > 15:
+        raise ValueError(
+            f"The dispenser has only 15 slots, but there are "
+            f"{len(event_keys)} different dispensing events."
+        )
+
+    slot_assignment = {
+        event_key: slot_number
+        for slot_number, event_key in enumerate(
+            event_keys,
+            start=1
+        )
+    }
+
+    for schedule in future_schedules:
+        schedule_id = schedule.get("id")
+
+        event_key = schedule_event_key(
+            schedule.get("dispense_date"),
+            schedule.get("dispense_time")
+        )
+
+        assigned_slot = slot_assignment[event_key]
+
+        if schedule.get("slot_number") != assigned_slot:
+            (
+                supabase
+                .table("medicines")
+                .update({
+                    "slot_number": assigned_slot
+                })
+                .eq("id", schedule_id)
+                .execute()
+            )
+
+
 def save_multiple_schedules(
     start_date,
     end_date,
     medicine_entries
 ):
     """
-    Save schedules for every selected date, medicine, and time.
+    Save schedules and assign slots according to date and time.
 
-    Returns:
-        saved_count: Number of new records inserted
-        skipped_count: Number of duplicate records skipped
+    Medicines scheduled together share one slot.
     """
-    existing_keys = get_existing_schedule_keys(
-        start_date,
-        end_date
-    )
+    future_schedules = get_future_schedules()
 
-    new_keys = set()
-    records_to_insert = []
+    existing_schedule_keys = {
+        (
+            str(schedule.get("medicine_name", ""))
+            .strip()
+            .casefold(),
+            str(schedule.get("dispense_date", "")),
+            normalize_database_time(
+                schedule.get("dispense_time")
+            )
+        )
+        for schedule in future_schedules
+    }
+
+    existing_event_keys = {
+        schedule_event_key(
+            schedule.get("dispense_date"),
+            schedule.get("dispense_time")
+        )
+        for schedule in future_schedules
+    }
+
+    candidate_records = []
+    candidate_schedule_keys = set()
+    candidate_event_keys = set()
     skipped_count = 0
 
     for scheduled_date in create_date_range(
@@ -265,39 +359,74 @@ def save_multiple_schedules(
         for medicine_entry in medicine_entries:
             for scheduled_time in medicine_entry["times"]:
                 schedule_key = (
-                    medicine_entry["slot"],
                     medicine_entry["medicine"].casefold(),
                     str(scheduled_date),
                     scheduled_time
                 )
 
+                event_key = schedule_event_key(
+                    scheduled_date,
+                    scheduled_time
+                )
+
                 if (
-                    schedule_key in existing_keys
-                    or schedule_key in new_keys
+                    schedule_key in existing_schedule_keys
+                    or schedule_key in candidate_schedule_keys
                 ):
                     skipped_count += 1
                     continue
 
-                records_to_insert.append(
+                candidate_records.append(
                     {
-                        "slot_number": medicine_entry["slot"],
-                        "medicine_name": medicine_entry["medicine"],
-                        "dispense_date": str(scheduled_date),
-                        "dispense_time": scheduled_time
+                        "medicine_name":
+                            medicine_entry["medicine"],
+                        "dispense_date":
+                            str(scheduled_date),
+                        "dispense_time":
+                            scheduled_time
                     }
                 )
 
-                new_keys.add(schedule_key)
+                candidate_schedule_keys.add(schedule_key)
+                candidate_event_keys.add(event_key)
 
-    # Insert in smaller batches to avoid a very large request.
+    all_event_keys = sorted(
+        existing_event_keys | candidate_event_keys
+    )
+
+    if len(all_event_keys) > 15:
+        raise ValueError(
+            f"This schedule requires {len(all_event_keys)} slots, "
+            "but the dispenser has only 15. Reduce the date range "
+            "or the number of different dispensing times."
+        )
+
+    slot_assignment = {
+        event_key: slot_number
+        for slot_number, event_key in enumerate(
+            all_event_keys,
+            start=1
+        )
+    }
+
+    # Assign a slot to every new record.
+    for record in candidate_records:
+        event_key = schedule_event_key(
+            record["dispense_date"],
+            record["dispense_time"]
+        )
+
+        record["slot_number"] = slot_assignment[event_key]
+
+    # Insert records in batches.
     batch_size = 500
 
     for start_index in range(
         0,
-        len(records_to_insert),
+        len(candidate_records),
         batch_size
     ):
-        current_batch = records_to_insert[
+        current_batch = candidate_records[
             start_index:start_index + batch_size
         ]
 
@@ -308,7 +437,11 @@ def save_multiple_schedules(
             .execute()
         )
 
-    return len(records_to_insert), skipped_count
+    # Existing records may need to move if an earlier
+    # date or time was added.
+    reassign_future_slots()
+
+    return len(candidate_records), skipped_count
 
 
 def delete_schedule(schedule_id):
@@ -748,26 +881,12 @@ for row_number, row_id in enumerate(
                     )
                     st.rerun()
 
-        medicine_column, slot_column = st.columns([3, 1])
-
-        with medicine_column:
-            st.text_input(
-                "Medicine Name",
-                placeholder="Example: Paracetamol",
-                key=f"medicine_name_{row_id}"
-            )
-
-        with slot_column:
-            st.number_input(
-                "Slot",
-                min_value=1,
-                max_value=16,
-                value=min(row_number, 16),
-                step=1,
-                key=f"medicine_slot_{row_id}",
-                help="Dispenser compartment number"
-            )
-
+        st.text_input(
+            "Medicine Name",
+            placeholder="Example: Paracetamol",
+            key=f"medicine_name_{row_id}",
+            help="The slot will be assigned automatically."
+        )
         st.multiselect(
             "Dispensing Times",
             options=time_options,
@@ -858,10 +977,7 @@ if save_schedules_clicked:
             ""
         ).strip()
 
-        medicine_slot = st.session_state.get(
-            f"medicine_slot_{row_id}",
-            1
-        )
+        
 
         medicine_times = st.session_state.get(
             f"medicine_times_{row_id}",
@@ -883,7 +999,6 @@ if save_schedules_clicked:
             medicine_entries.append(
                 {
                     "medicine": medicine_name,
-                    "slot": int(medicine_slot),
                     "times": sorted(medicine_times)
                 }
             )
@@ -925,6 +1040,8 @@ if save_schedules_clicked:
                 st.warning(
                     "There were no schedules to save."
                 )
+        except ValueError as error:
+            st.error(str(error))
 
         except Exception as error:
             st.error(
@@ -1083,7 +1200,7 @@ else:
     # DELETE SELECTED RECORDS
     # ----------------------------------------------
     if delete_selected:
-        successfully_deleted = 0
+        successfully_deleted = 0                                
         deletion_errors = []
 
         for schedule in selected_schedules:
@@ -1129,6 +1246,13 @@ else:
 
             st.rerun()
 
+        if successfully_deleted:
+            try:
+                reassign_future_slots()
+            except Exception as error:
+                deletion_errors.append(
+                    f"Slots could not be rearranged:{error}"
+                )
     # ----------------------------------------------
     # SCHEDULE LIST
     # ----------------------------------------------
